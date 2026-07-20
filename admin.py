@@ -91,7 +91,7 @@ def _check_csrf():
 BASE_STYLE = """
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; background:#f4f6f8; margin:0; }
-  .wrap { max-width:760px; margin:40px auto; padding:0 16px; }
+  .wrap { max-width:880px; margin:40px auto; padding:0 16px; }
   .card { background:#fff; border-radius:10px; padding:24px 28px; margin-bottom:20px;
           box-shadow:0 1px 4px rgba(0,0,0,0.08); }
   h1 { font-size:22px; margin:0 0 4px; }
@@ -113,6 +113,13 @@ BASE_STYLE = """
   .status .failed { color:#c62828; font-weight:600; }
   a.logout { float:right; font-size:13px; color:#c62828; text-decoration:none; }
   a.back { font-size:13px; color:#1565c0; }
+  .upload-row { display:flex; gap:18px; align-items:flex-start; }
+  .upload-row .upload-form { flex:1 1 auto; min-width:0; }
+  .upload-preview { flex:0 0 150px; text-align:center; }
+  .upload-preview img { max-width:150px; max-height:110px; object-fit:cover;
+    border:1px solid #cfd8dc; border-radius:6px; padding:3px; background:#fafafa; display:block; margin:0 auto; }
+  .upload-preview .fname { font-size:11px; color:#607d8b; margin-top:5px; word-break:break-all; }
+  .upload-preview .none-yet { font-size:12px; color:#90a4ae; font-style:italic; padding-top:30px; }
 </style>
 """
 
@@ -238,34 +245,42 @@ PANEL_TEMPLATE = BASE_STYLE + """
     <p class="status">Shown in the top-left of the navbar. Ships with a default
       flag image, but can be replaced here without touching any code — e.g.
       to swap in a higher-resolution version.</p>
-    <p class="status">
-      {% if flag_filename %}Currently set: <b>{{ flag_filename }}</b>{% else %}Currently using the bundled default flag.{% endif %}
-    </p>
-    <img src="/assets-flag?_={{ range(1,99999)|random }}" alt="Current flag"
-         style="height:40px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
-    <form method="post" action="{{ url_for('admin.upload_flag') }}" enctype="multipart/form-data">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Flag image (PNG/JPG)</label>
-      <input type="file" name="flag" accept=".png,.jpg,.jpeg">
-      <button type="submit">Upload</button>
-    </form>
+    <div class="upload-row">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_flag') }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Flag image (PNG/JPG)</label>
+          <input type="file" name="flag" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        <img src="/assets-flag?_={{ range(1,99999)|random }}" alt="Current flag">
+        <div class="fname">{{ flag_filename or "bundled default" }}</div>
+      </div>
+    </div>
   </div>
 
   <div class="card">
     <h2>5. Upload logo / photo</h2>
-    <p class="status">
-      {% if logo_filename %}Currently set: <b>{{ logo_filename }}</b>{% else %}No logo uploaded yet.{% endif %}
-    </p>
-    {% if logo_filename %}
-    <img src="/assets-logo?_={{ range(1,99999)|random }}" alt="Current logo"
-         style="height:40px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
-    {% endif %}
-    <form method="post" action="{{ url_for('admin.upload_logo') }}" enctype="multipart/form-data">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Navbar logo (PNG/JPG)</label>
-      <input type="file" name="logo" accept=".png,.jpg,.jpeg">
-      <button type="submit">Upload</button>
-    </form>
+    <div class="upload-row">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_logo') }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Navbar logo (PNG/JPG)</label>
+          <input type="file" name="logo" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        {% if logo_filename %}
+        <img src="/assets-logo?_={{ range(1,99999)|random }}" alt="Current logo">
+        <div class="fname">{{ logo_filename }}</div>
+        {% else %}
+        <div class="none-yet">No logo uploaded yet</div>
+        {% endif %}
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -274,19 +289,24 @@ PANEL_TEMPLATE = BASE_STYLE + """
       landscape photo (e.g. a hydropower dam, transmission towers, or the Nepal
       hills) works best. It's automatically dimmed with an overlay so page text
       stays readable.</p>
-    <p class="status">
-      {% if background_filename %}Currently set: <b>{{ background_filename }}</b>{% else %}No background photo uploaded yet.{% endif %}
-    </p>
-    {% if background_filename %}
-    <img src="/assets-background?_={{ range(1,99999)|random }}" alt="Current background"
-         style="max-height:80px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
-    {% endif %}
-    <form method="post" action="{{ url_for('admin.upload_background') }}" enctype="multipart/form-data">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Background / hero photo (PNG/JPG)</label>
-      <input type="file" name="background" accept=".png,.jpg,.jpeg">
-      <button type="submit">Upload</button>
-    </form>
+    <div class="upload-row">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_background') }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>Background / hero photo (PNG/JPG)</label>
+          <input type="file" name="background" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        {% if background_filename %}
+        <img src="/assets-background?_={{ range(1,99999)|random }}" alt="Current background">
+        <div class="fname">{{ background_filename }}</div>
+        {% else %}
+        <div class="none-yet">No background uploaded yet</div>
+        {% endif %}
+      </div>
+    </div>
   </div>
 
   <div class="card">
@@ -311,17 +331,24 @@ PANEL_TEMPLATE = BASE_STYLE + """
       towers for Transmission Line). Falls back to a plain colour card if none
       is uploaded for a type.</p>
     {% for t in project_types %}
-    <form method="post" action="{{ url_for('admin.upload_type_bg', slug=t.slug) }}"
-          enctype="multipart/form-data" style="margin-bottom:10px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>{{ t.name }} {{ "(image set)" if t.has_bg else "(no image yet)" }}</label>
-      {% if t.has_bg %}
-      <img src="{{ t.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ t.name }} background"
-           style="height:32px;border:1px solid #ccc;border-radius:4px;padding:2px;margin:4px 0;display:block;">
-      {% endif %}
-      <input type="file" name="type_bg" accept=".png,.jpg,.jpeg">
-      <button type="submit">Upload</button>
-    </form>
+    <div class="upload-row" style="margin-bottom:14px;">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_type_bg', slug=t.slug) }}"
+              enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>{{ t.name }} {{ "(image set)" if t.has_bg else "(no image yet)" }}</label>
+          <input type="file" name="type_bg" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        {% if t.has_bg %}
+        <img src="{{ t.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ t.name }} background">
+        {% else %}
+        <div class="none-yet">No image yet</div>
+        {% endif %}
+      </div>
+    </div>
     {% endfor %}
   </div>
 
@@ -330,17 +357,24 @@ PANEL_TEMPLATE = BASE_STYLE + """
     <p class="status">Optional photo shown behind each province card on the
       Power Plants tab's province breakdown.</p>
     {% for p in provinces %}
-    <form method="post" action="{{ url_for('admin.upload_province_bg', slug=p.slug) }}"
-          enctype="multipart/form-data" style="margin-bottom:10px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>{{ p.name }} {{ "(image set)" if p.has_bg else "(no image yet)" }}</label>
-      {% if p.has_bg %}
-      <img src="{{ p.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ p.name }} background"
-           style="height:32px;border:1px solid #ccc;border-radius:4px;padding:2px;margin:4px 0;display:block;">
-      {% endif %}
-      <input type="file" name="province_bg" accept=".png,.jpg,.jpeg">
-      <button type="submit">Upload</button>
-    </form>
+    <div class="upload-row" style="margin-bottom:14px;">
+      <div class="upload-form">
+        <form method="post" action="{{ url_for('admin.upload_province_bg', slug=p.slug) }}"
+              enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>{{ p.name }} {{ "(image set)" if p.has_bg else "(no image yet)" }}</label>
+          <input type="file" name="province_bg" accept=".png,.jpg,.jpeg">
+          <button type="submit">Upload</button>
+        </form>
+      </div>
+      <div class="upload-preview">
+        {% if p.has_bg %}
+        <img src="{{ p.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ p.name }} background">
+        {% else %}
+        <div class="none-yet">No image yet</div>
+        {% endif %}
+      </div>
+    </div>
     {% endfor %}
   </div>
 
