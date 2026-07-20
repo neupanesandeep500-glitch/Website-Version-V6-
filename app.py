@@ -807,6 +807,14 @@ STAGE_SHORT = {
     "Operating": "Operation",
 }
 
+# Overview tab's type-flip card lists/charts the most-advanced stage first
+# (Operating -> Construction License -> Appl. for Construction -> Survey
+# License -> Appl. for Survey), the reverse of the pipeline order used
+# everywhere else (STATUS_ORDER runs earliest-stage-first, which is right
+# for a funnel chart but reads backwards for "what's already built vs.
+# what's still in the pipeline" at a glance).
+FLIP_CARD_STAGE_ORDER = list(reversed(de.STATUS_ORDER))
+
 
 _PLACEHOLDER_WORDS = ("load", "tbd", "n/a", "na", "pending", "update", "unknown",
                       "unspecified", "-", "—", "n.a", "to be")
@@ -1017,12 +1025,17 @@ def render_ticker_bar(loader, recs=None):
     ], className="ticker-bar")
 
 
-def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color, total_km=0.0):
+def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color, total_km=0.0,
+                          stage_order=None):
     """One category card (used for both project-type and province cards):
     an optional uploaded background photo (falls back to a flat colour
     swatch), the category name, its totals, and a compact per-stage
     breakdown (count + MW, plus circuit length in km when relevant —
-    i.e. Transmission Line) underneath."""
+    i.e. Transmission Line) underneath. stage_order lets a caller show
+    stages in a different sequence than the default pipeline order (e.g.
+    the Overview flip card lists most-advanced-first) without affecting
+    other callers that still want the natural funnel order."""
+    stage_order = stage_order or de.STATUS_ORDER
     header_style = {
         "borderRadius": "8px 8px 0 0",
         "padding": "14px 16px",
@@ -1043,7 +1056,7 @@ def render_category_card(label, stage_map, total_n, total_mw, bg_url, base_color
         header_style["backgroundColor"] = base_color
 
     stage_rows = []
-    for st in de.STATUS_ORDER:
+    for st in stage_order:
         if st not in stage_map:
             continue
         n, mw, km = stage_map[st]
@@ -1139,12 +1152,17 @@ def render_overview(loader, recs):
     return html.Div([top_row, html.Hr(), sub_tabs])
 
 
-def type_flip_chart_figure(t, stage_map):
+def type_flip_chart_figure(t, stage_map, bg_url=None):
     """Small paired chart that flips in sync with the type-flip-card:
     the license-stage breakdown for whichever type is currently shown on
     the card — capacity (MW) for power-plant types, circuit length (km)
-    for Transmission Line, since MW is frequently blank/irrelevant there."""
-    stages_present = [s for s in de.STATUS_ORDER if s in stage_map]
+    for Transmission Line, since MW is frequently blank/irrelevant there.
+    Stages read most-advanced-first (FLIP_CARD_STAGE_ORDER), matching the
+    card on the left. When the type has an admin-uploaded background
+    photo, the same image spans the full width of the chart behind the
+    bars (dimmed, so the bars/labels stay readable) instead of only
+    appearing on the card."""
+    stages_present = [s for s in FLIP_CARD_STAGE_ORDER if s in stage_map]
     use_km = (t == "Transmission Line")
     idx = 2 if use_km else 1
     unit = "km" if use_km else "MW"
@@ -1153,8 +1171,21 @@ def type_flip_chart_figure(t, stage_map):
         marker_color=[STATUS_COLOR_MAP.get(s, "#90a4ae") for s in stages_present],
         text=[f"{stage_map[s][idx]:,.1f} {unit}" for s in stages_present], textposition="outside",
     ))
-    fig.update_layout(title=f"{t} — {'Length (km)' if use_km else 'Capacity (MW)'} by License Stage",
-                       height=360, yaxis_title=unit, margin=dict(l=10, r=10, t=40, b=10))
+    layout_kwargs = dict(
+        title=f"{t} — {'Length (km)' if use_km else 'Capacity (MW)'} by License Stage",
+        height=360, yaxis_title=unit, margin=dict(l=10, r=10, t=40, b=10),
+    )
+    if bg_url:
+        layout_kwargs["images"] = [dict(
+            source=bg_url, xref="paper", yref="paper",
+            x=0, y=1, sizex=1, sizey=1, xanchor="left", yanchor="top",
+            sizing="stretch", opacity=0.30, layer="below",
+        )]
+        # Translucent plot background so the image reads behind the bars
+        # left-to-right across the whole chart, not just a strip.
+        layout_kwargs["plot_bgcolor"] = "rgba(255,255,255,0.72)"
+        layout_kwargs["paper_bgcolor"] = "rgba(0,0,0,0)"
+    fig.update_layout(**layout_kwargs)
     return fig
 
 
@@ -1187,10 +1218,11 @@ def flip_type_card(n, f_type, f_status, f_province, f_capacity, f_year, f_search
     if not types:
         return None, empty_fig
     t = types[n % len(types)]
+    bg_url = ss.get_type_bg_url(t)
     card = render_category_card(t, stages[t], totals[t][0], totals[t][1],
-                                 ss.get_type_bg_url(t), TYPE_COLOR_MAP.get(t, "#607d8b"),
-                                 total_km=totals[t][2])
-    return card, type_flip_chart_figure(t, stages[t])
+                                 bg_url, TYPE_COLOR_MAP.get(t, "#607d8b"),
+                                 total_km=totals[t][2], stage_order=FLIP_CARD_STAGE_ORDER)
+    return card, type_flip_chart_figure(t, stages[t], bg_url=bg_url)
 
 
 def render_plants_tab(loader, recs):
