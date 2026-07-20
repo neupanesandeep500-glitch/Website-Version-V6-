@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: nepal-power-license-dashboard
+    runtime: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:server --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      # Set these three in the Render dashboard (Environment tab) so the
+      # dashboard self-heals on every redeploy instead of coming up blank —
+      # see server_state.py's bootstrap_on_startup() docstring.
+      - key: DEFAULT_SHEET_URL
+        sync: false
+      - key: DEFAULT_GIS_DRIVE_URL
+        sync: false
+      - key: DEFAULT_PA_DRIVE_URL
+        sync: false
+      - key: AUTO_REFRESH_HOURS
+        value: "6"
