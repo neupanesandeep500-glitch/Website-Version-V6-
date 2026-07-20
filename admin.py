@@ -238,6 +238,11 @@ PANEL_TEMPLATE = BASE_STYLE + """
     <p class="status">Shown in the top-left of the navbar. Ships with a default
       flag image, but can be replaced here without touching any code — e.g.
       to swap in a higher-resolution version.</p>
+    <p class="status">
+      {% if flag_filename %}Currently set: <b>{{ flag_filename }}</b>{% else %}Currently using the bundled default flag.{% endif %}
+    </p>
+    <img src="/assets-flag?_={{ range(1,99999)|random }}" alt="Current flag"
+         style="height:40px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
     <form method="post" action="{{ url_for('admin.upload_flag') }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Flag image (PNG/JPG)</label>
@@ -248,6 +253,13 @@ PANEL_TEMPLATE = BASE_STYLE + """
 
   <div class="card">
     <h2>5. Upload logo / photo</h2>
+    <p class="status">
+      {% if logo_filename %}Currently set: <b>{{ logo_filename }}</b>{% else %}No logo uploaded yet.{% endif %}
+    </p>
+    {% if logo_filename %}
+    <img src="/assets-logo?_={{ range(1,99999)|random }}" alt="Current logo"
+         style="height:40px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
+    {% endif %}
     <form method="post" action="{{ url_for('admin.upload_logo') }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Navbar logo (PNG/JPG)</label>
@@ -262,6 +274,13 @@ PANEL_TEMPLATE = BASE_STYLE + """
       landscape photo (e.g. a hydropower dam, transmission towers, or the Nepal
       hills) works best. It's automatically dimmed with an overlay so page text
       stays readable.</p>
+    <p class="status">
+      {% if background_filename %}Currently set: <b>{{ background_filename }}</b>{% else %}No background photo uploaded yet.{% endif %}
+    </p>
+    {% if background_filename %}
+    <img src="/assets-background?_={{ range(1,99999)|random }}" alt="Current background"
+         style="max-height:80px;border:1px solid #ccc;border-radius:4px;padding:2px;margin-bottom:8px;display:block;">
+    {% endif %}
     <form method="post" action="{{ url_for('admin.upload_background') }}" enctype="multipart/form-data">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Background / hero photo (PNG/JPG)</label>
@@ -296,6 +315,10 @@ PANEL_TEMPLATE = BASE_STYLE + """
           enctype="multipart/form-data" style="margin-bottom:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>{{ t.name }} {{ "(image set)" if t.has_bg else "(no image yet)" }}</label>
+      {% if t.has_bg %}
+      <img src="{{ t.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ t.name }} background"
+           style="height:32px;border:1px solid #ccc;border-radius:4px;padding:2px;margin:4px 0;display:block;">
+      {% endif %}
       <input type="file" name="type_bg" accept=".png,.jpg,.jpeg">
       <button type="submit">Upload</button>
     </form>
@@ -311,6 +334,10 @@ PANEL_TEMPLATE = BASE_STYLE + """
           enctype="multipart/form-data" style="margin-bottom:10px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>{{ p.name }} {{ "(image set)" if p.has_bg else "(no image yet)" }}</label>
+      {% if p.has_bg %}
+      <img src="{{ p.bg_url }}?_={{ range(1,99999)|random }}" alt="{{ p.name }} background"
+           style="height:32px;border:1px solid #ccc;border-radius:4px;padding:2px;margin:4px 0;display:block;">
+      {% endif %}
       <input type="file" name="province_bg" accept=".png,.jpg,.jpeg">
       <button type="submit">Upload</button>
     </form>
@@ -358,11 +385,13 @@ def panel(message=None, ok=True):
     unmapped_districts = loader.get_unmapped_districts()[:20] if loader else []
 
     project_types = [
-        {"name": t, "slug": ss.slugify_type(t), "has_bg": bool(ss.get_type_bg_path(t))}
+        {"name": t, "slug": ss.slugify_type(t), "has_bg": bool(ss.get_type_bg_path(t)),
+         "bg_url": ss.get_type_bg_url(t)}
         for t in de.TYPE_ORDER
     ]
     provinces = [
-        {"name": p, "slug": ss.slugify_type(p), "has_bg": bool(ss.get_province_bg_path(p))}
+        {"name": p, "slug": ss.slugify_type(p), "has_bg": bool(ss.get_province_bg_path(p)),
+         "bg_url": ss.get_province_bg_url(p)}
         for p in de.PROVINCE_ORDER
     ]
 
@@ -390,6 +419,9 @@ def panel(message=None, ok=True):
         last_gis_sync=ss.STATE.get("last_gis_sync"),
         last_pa_sync=ss.STATE.get("last_pa_sync"),
         unmapped_districts=unmapped_districts,
+        flag_filename=ss.STATE.get("flag_filename") if ss.get_flag_path() else None,
+        logo_filename=ss.STATE.get("logo_filename") if ss.get_logo_path() else None,
+        background_filename=ss.STATE.get("background_filename") if ss.get_background_path() else None,
     )
 
 
@@ -416,19 +448,14 @@ def sync_gis_drive():
     url = request.form.get("gis_drive_url", "").strip()
     if not url:
         return panel(message="Please paste a Google Drive link.", ok=False)
-    try:
-        # The download itself is comparatively light; only the shapefile
-        # PARSE is heavy, so only that step goes through the background
-        # loader — the download still happens inline so we can report a
-        # clear error immediately if the link isn't shared correctly.
-        de.download_google_drive_file(url, ss.GIS_ZIP_PATH)
-        ss.STATE["gis_drive_url"] = url
-        ss.start_gis_reload_async()
-        return panel(message="Downloaded — parsing in the background now. "
-                              "Refresh this page in ~30-60s for status; the "
-                              "site stays up the whole time.", ok=True)
-    except Exception as exc:
-        return panel(message=f"Drive sync failed: {exc}", ok=False)
+    # Both the download and the parse happen in the background now — a
+    # large file's download alone used to be able to block this request
+    # past gunicorn's timeout and take the whole site (admin panel
+    # included) down with a 502. This route just kicks the job off.
+    ss.start_gis_drive_sync_async(url)
+    return panel(message="Sync started in the background (download + parse). "
+                          "Refresh this page in ~30-90s for status; the "
+                          "site and admin panel stay up the whole time.", ok=True)
 
 
 @admin_bp.route("/sync-pa-drive", methods=["POST"])
@@ -438,14 +465,9 @@ def sync_pa_drive():
     url = request.form.get("pa_drive_url", "").strip()
     if not url:
         return panel(message="Please paste a Google Drive link.", ok=False)
-    try:
-        de.download_google_drive_file(url, ss.PA_ZIP_PATH)
-        ss.STATE["pa_drive_url"] = url
-        ss.start_pa_reload_async()
-        return panel(message="Downloaded — parsing in the background now. "
-                              "Refresh this page in ~30-60s for status.", ok=True)
-    except Exception as exc:
-        return panel(message=f"Drive sync failed: {exc}", ok=False)
+    ss.start_pa_drive_sync_async(url)
+    return panel(message="Sync started in the background (download + parse). "
+                          "Refresh this page in ~30-90s for status.", ok=True)
 
 
 @admin_bp.route("/upload-workbook", methods=["POST"])
