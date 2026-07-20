@@ -29,6 +29,7 @@ available memory, with a clear error instead of a crash.
 """
 
 import os
+import copy
 import json
 import threading
 import traceback
@@ -134,45 +135,71 @@ def ensure_gis_loaded(force=False):
     the synchronous version — safe to call at process startup (blocking
     briefly before the app serves traffic is fine there). Admin-panel
     uploads should call start_gis_reload_async()/start_pa_reload_async()
-    instead, so a slow parse can't take the whole site down with it."""
-    if force:
-        STATE["gis_loaded"] = False
-        STATE["pa_loaded"] = False
+    instead, so a slow parse can't take the whole site down with it.
 
-    if not STATE["gis_loaded"]:
+    IMPORTANT: this reloads onto a *copy* of the shared de.GIS engine and
+    only swaps `data_engine.GIS` over to it once loading has fully
+    succeeded. Mutating the live singleton in place used to mean any
+    thread rendering the GIS map mid-reload could see a half-populated
+    engine (empty district list for a few hundred ms to a few seconds),
+    and — worse — a *failed* scheduled reload (e.g. a dropped Drive
+    connection during the 6-hourly auto-refresh) used to leave
+    STATE['gis_loaded'] flipped to False with nothing to show, even
+    though the previous data was still perfectly good. Both of those
+    looked to a visitor like the map/data 'disappearing' periodically.
+    Now a failed or in-progress reload never affects what's currently
+    being served."""
+    if force:
+        # Force a re-check, but DON'T blank the flags up front — the
+        # currently-loaded (old) engine keeps serving until a new one is
+        # ready to swap in, or we give up and keep the old one anyway.
+        pass
+
+    if force or not STATE["gis_loaded"]:
         try:
+            candidate = copy.copy(de.GIS)
             if os.path.exists(GIS_ZIP_PATH):
                 _check_zip_size(GIS_ZIP_PATH, "GIS package")
-                ok = de.GIS.load_from_path(GIS_ZIP_PATH)
+                ok = candidate.load_from_path(GIS_ZIP_PATH)
             else:
-                ok = de.GIS.load()  # falls back to searching next to app.py
-            STATE["gis_loaded"] = bool(ok)
-            STATE["gis_load_error"] = None if ok else (de.GIS.error or "Loader returned no data.")
+                ok = candidate.load()
+            if ok:
+                de.GIS = candidate
+                STATE["gis_loaded"] = True
+                STATE["gis_load_error"] = None
+            elif not STATE["gis_loaded"]:
+                # Nothing was loaded before either — surface the error.
+                STATE["gis_load_error"] = candidate.error or "Loader returned no data."
+            # else: keep serving the previously-loaded (old) de.GIS as-is.
         except Exception as exc:
             traceback.print_exc()
-            STATE["gis_loaded"] = False
-            STATE["gis_load_error"] = str(exc)
+            if not STATE["gis_loaded"]:
+                STATE["gis_load_error"] = str(exc)
 
-    if not STATE["pa_loaded"]:
+    if force or not STATE["pa_loaded"]:
         try:
+            candidate = copy.copy(de.GIS)
             if os.path.exists(PA_ZIP_PATH):
                 _check_zip_size(PA_ZIP_PATH, "Protected-area package")
-                ok = de.GIS.load_protected_from_path(PA_ZIP_PATH)
+                ok = candidate.load_protected_from_path(PA_ZIP_PATH)
             else:
-                ok = de.GIS.load_protected()
-            STATE["pa_loaded"] = bool(ok)
-            STATE["pa_load_error"] = None if ok else "Loader returned no data."
+                ok = candidate.load_protected()
+            if ok:
+                de.GIS = candidate
+                STATE["pa_loaded"] = True
+                STATE["pa_load_error"] = None
+            elif not STATE["pa_loaded"]:
+                STATE["pa_load_error"] = "Loader returned no data."
         except Exception as exc:
             traceback.print_exc()
-            STATE["pa_loaded"] = False
-            STATE["pa_load_error"] = str(exc)
+            if not STATE["pa_loaded"]:
+                STATE["pa_load_error"] = str(exc)
 
 
 def _run_async(loading_flag, error_flag, fn):
     def _worker():
         with _gis_lock:
             STATE[loading_flag] = True
-            STATE[error_flag] = None
             try:
                 fn()
             except Exception as exc:
@@ -191,20 +218,23 @@ def start_gis_reload_async():
     request can't time out or take the (single-worker) process down with
     it. Poll STATE['gis_loading'] / STATE['gis_load_error'] from the admin
     panel to show progress; the public dashboard keeps serving whatever
-    was loaded before while this runs."""
+    was loaded before while this runs, and keeps serving it if this
+    attempt fails — see ensure_gis_loaded()'s docstring for why the
+    reload happens on a copy that's only swapped in on success."""
 
     def _do():
-        STATE["gis_loaded"] = False
+        candidate = copy.copy(de.GIS)
         if os.path.exists(GIS_ZIP_PATH):
             _check_zip_size(GIS_ZIP_PATH, "GIS package")
-            ok = de.GIS.load_from_path(GIS_ZIP_PATH)
+            ok = candidate.load_from_path(GIS_ZIP_PATH)
         else:
-            ok = de.GIS.load()
-        STATE["gis_loaded"] = bool(ok)
-        if ok:
-            _reparse_current_workbook_if_any()
-        else:
-            raise RuntimeError(de.GIS.error or "Loader returned no data.")
+            ok = candidate.load()
+        if not ok:
+            raise RuntimeError(candidate.error or "Loader returned no data.")
+        de.GIS = candidate
+        STATE["gis_loaded"] = True
+        STATE["gis_load_error"] = None
+        _reparse_current_workbook_if_any()
 
     _run_async("gis_loading", "gis_load_error", _do)
 
@@ -213,28 +243,45 @@ def start_pa_reload_async():
     """Same as start_gis_reload_async(), for the protected-area package."""
 
     def _do():
-        STATE["pa_loaded"] = False
+        candidate = copy.copy(de.GIS)
         if os.path.exists(PA_ZIP_PATH):
             _check_zip_size(PA_ZIP_PATH, "Protected-area package")
-            ok = de.GIS.load_protected_from_path(PA_ZIP_PATH)
+            ok = candidate.load_protected_from_path(PA_ZIP_PATH)
         else:
-            ok = de.GIS.load_protected()
-        STATE["pa_loaded"] = bool(ok)
-        if ok:
-            _reparse_current_workbook_if_any()
-        else:
+            ok = candidate.load_protected()
+        if not ok:
             raise RuntimeError("Protected-area loader returned no data.")
+        de.GIS = candidate
+        STATE["pa_loaded"] = True
+        STATE["pa_load_error"] = None
+        _reparse_current_workbook_if_any()
 
     _run_async("pa_loading", "pa_load_error", _do)
 
 
 def load_from_path(path, label):
+    """Parse a workbook and, only if the parse actually produced usable
+    data, make it the one being served. A failed or empty parse (e.g. a
+    transient Google Sheets fetch hiccup during the scheduled background
+    refresh) used to unconditionally overwrite STATE['loader'] — including
+    with an empty/error'd loader — which blanked out every tab on the live
+    site until the next successful sync. Now a bad attempt only replaces
+    the previous good data if there WAS no previous good data yet; either
+    way the returned loader still reflects exactly what this attempt did,
+    so admin-panel messages (which read the returned object directly, not
+    STATE) are unaffected."""
     ensure_gis_loaded()
     loader = de.DataLoader(path)
     loader.load()
-    STATE["loader"] = loader
-    STATE["error"] = loader.error
-    STATE["source_label"] = label
+    got_data = bool(loader.records) and not loader.error
+    had_data_before = STATE.get("loader") is not None and bool(STATE["loader"].records)
+    if got_data or not had_data_before:
+        STATE["loader"] = loader
+        STATE["error"] = loader.error
+        STATE["source_label"] = label
+    else:
+        STATE["error"] = ((loader.error or "This sync returned 0 records.") +
+                           " Previously loaded data is still being served.")
     return loader
 
 
@@ -295,6 +342,55 @@ def load_pa_from_drive(url_or_id):
     if changed:
         _reparse_current_workbook_if_any()
     return changed
+
+
+def start_gis_drive_sync_async(url_or_id):
+    """Fully-async Drive sync for the admin panel's 'Sync now' button: the
+    download AND the parse both run in the background thread, so the HTTP
+    request returns immediately. The previous version downloaded inline
+    (up to ~90-180s for a large zip needing Drive's virus-scan-confirm
+    round trip) before handing off to the async parser — that download
+    alone could exceed gunicorn's --timeout, SIGKILL the single worker,
+    and 502 the whole site including the admin panel it was needed to
+    reach. Now nothing about this sync can block a request thread."""
+
+    def _do():
+        de.download_google_drive_file(url_or_id, GIS_ZIP_PATH)
+        candidate = copy.copy(de.GIS)
+        _check_zip_size(GIS_ZIP_PATH, "GIS package")
+        ok = candidate.load_from_path(GIS_ZIP_PATH)
+        if not ok:
+            raise RuntimeError(candidate.error or "Loader returned no data.")
+        de.GIS = candidate
+        STATE["gis_loaded"] = True
+        STATE["gis_load_error"] = None
+        _save_config(gis_drive_url=url_or_id, last_gis_sync=_now_str())
+        STATE["gis_drive_url"] = url_or_id
+        STATE["last_gis_sync"] = _now_str()
+        _reparse_current_workbook_if_any()
+
+    _run_async("gis_loading", "gis_load_error", _do)
+
+
+def start_pa_drive_sync_async(url_or_id):
+    """Same as start_gis_drive_sync_async(), for the protected-area package."""
+
+    def _do():
+        de.download_google_drive_file(url_or_id, PA_ZIP_PATH)
+        candidate = copy.copy(de.GIS)
+        _check_zip_size(PA_ZIP_PATH, "Protected-area package")
+        ok = candidate.load_protected_from_path(PA_ZIP_PATH)
+        if not ok:
+            raise RuntimeError("Protected-area loader returned no data.")
+        de.GIS = candidate
+        STATE["pa_loaded"] = True
+        STATE["pa_load_error"] = None
+        _save_config(pa_drive_url=url_or_id, last_pa_sync=_now_str())
+        STATE["pa_drive_url"] = url_or_id
+        STATE["last_pa_sync"] = _now_str()
+        _reparse_current_workbook_if_any()
+
+    _run_async("pa_loading", "pa_load_error", _do)
 
 
 def reload_cached_on_startup():
